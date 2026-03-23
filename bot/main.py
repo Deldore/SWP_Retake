@@ -17,7 +17,12 @@ logger = logging.getLogger(__name__)
 
 TEXTS = {
     "en": {
-        "start": "Hi! I am Poetry Bot.\nUse buttons below to get recommendations, run memory checks, and work with voice messages.",
+        "start": (
+            "Hi! I am Poetry Bot.\n\n"
+            "I help you build a stable poetry memory: choose suitable poems, learn them, "
+            "check recall, and revisit what you have already learned.\n"
+            "Use the menu below to start."
+        ),
         "help": (
             "/start - open interactive menu\n"
             "/help - show this help\n\n"
@@ -28,7 +33,10 @@ TEXTS = {
             "4) Send remembered lines as text, or press 'Memory check'\n\n"
             "You can still type free text if you prefer."
         ),
-        "menu_title": "Main menu. Choose an action:",
+        "menu_title": (
+            "Main menu.\n"
+            "Choose what you want to do: get a new recommendation or revise memorized poems."
+        ),
         "menu_recommend": "Get recommendation",
         "menu_memory": "Memory check",
         "menu_voice": "Voice message help",
@@ -75,7 +83,12 @@ TEXTS = {
         "mem_success": "Excellent! You reproduced the text without mistakes.\n\nReady for the next poem?",
     },
     "ru": {
-        "start": "Привет! Я Poetry Bot.\nИспользуйте кнопки ниже: рекомендации, проверка памяти и работа с голосом.",
+        "start": (
+            "Привет! Я Poetry Bot.\n\n"
+            "Я помогаю системно запоминать стихотворения: подбираю подходящие, "
+            "помогаю проверять воспроизведение и возвращаться к уже выученным произведениям.\n"
+            "Используйте меню ниже, чтобы начать."
+        ),
         "help": (
             "/start - открыть интерактивное меню\n"
             "/help - показать справку\n\n"
@@ -86,7 +99,10 @@ TEXTS = {
             "4) Отправьте строки по памяти текстом или нажмите 'Проверка памяти'\n\n"
             "Можно также писать текст вручную."
         ),
-        "menu_title": "Главное меню. Выберите действие:",
+        "menu_title": (
+            "Главное меню.\n"
+            "Выберите действие: получить новую рекомендацию или повторить уже выученные стихи."
+        ),
         "menu_recommend": "Подобрать стихотворение",
         "menu_memory": "Проверка памяти",
         "menu_voice": "Помощь по голосу",
@@ -195,11 +211,11 @@ def main_menu_keyboard(ui_lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(t(ui_lang, "menu_recommend"), callback_data="menu:recommend")],
-            [InlineKeyboardButton(t(ui_lang, "menu_memory"), callback_data="menu:memory")],
             [InlineKeyboardButton(t(ui_lang, "menu_learned"), callback_data="menu:learned")],
-            [InlineKeyboardButton(t(ui_lang, "menu_voice"), callback_data="menu:voice")],
-            [InlineKeyboardButton(t(ui_lang, "menu_help"), callback_data="menu:help")],
-            [InlineKeyboardButton(t(ui_lang, "menu_lang"), callback_data="menu:toggle_lang")],
+            [
+                InlineKeyboardButton(t(ui_lang, "menu_help"), callback_data="menu:help"),
+                InlineKeyboardButton(t(ui_lang, "menu_lang"), callback_data="menu:toggle_lang"),
+            ],
         ]
     )
 
@@ -233,9 +249,11 @@ def memorized_poems_keyboard(ui_lang: str, memorized_poems: list[dict]) -> Inlin
     for poem in memorized_poems:
         poem_id = poem.get("id")
         title = str(poem.get("title", ""))
+        memorized_at = str(poem.get("memorized_at", "")).strip()
         if poem_id is None:
             continue
-        rows.append([InlineKeyboardButton(title, callback_data=f"learned:open:{poem_id}")])
+        label = f"{title} ({memorized_at})" if memorized_at else title
+        rows.append([InlineKeyboardButton(label, callback_data=f"learned:open:{poem_id}")])
 
     rows.append([InlineKeyboardButton(t(ui_lang, "mem_main"), callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)

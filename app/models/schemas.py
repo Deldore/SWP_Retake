@@ -15,6 +15,7 @@ class PoemBriefPayload(BaseModel):
     id: int
     title: str
     author: str
+    memorized_at: str | None = None
 
 
 class ChatRequest(BaseModel):

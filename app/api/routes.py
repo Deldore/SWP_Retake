@@ -13,9 +13,8 @@ from app.models.schemas import (
 from app.services.recommender import (
     build_reply,
     mark_poem_memorized,
-    memorized_poems as list_memorized_poems,
+    memorized_poem_brief_payloads,
     memorized_poems_reply,
-    poem_brief_payloads,
     record_audio_submission,
     select_memorized_poem_for_user,
 )
@@ -49,7 +48,7 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)) -> BotRe
     )
     memorized_list_payload: list[dict] = []
     if action == "no_matching_poems":
-        memorized_list_payload = poem_brief_payloads(list_memorized_poems(session, payload.telegram_user_id))
+        memorized_list_payload = memorized_poem_brief_payloads(session, payload.telegram_user_id)
 
     return BotReply(
         reply_text=reply_text,
@@ -105,7 +104,7 @@ def memorized_poems_list(payload: MemorizedPoemsRequest, session: Session = Depe
         ),
         recommended_poem_id=None,
         action="memorized_poems_list",
-        memorized_poems=poem_brief_payloads(list_memorized_poems(session, payload.telegram_user_id)),
+        memorized_poems=memorized_poem_brief_payloads(session, payload.telegram_user_id),
     )
 
 

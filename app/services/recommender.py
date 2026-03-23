@@ -152,8 +152,35 @@ def memorized_poems(session: Session, telegram_user_id: int) -> list[Poem]:
     return result
 
 
-def poem_brief_payloads(poems: list[Poem]) -> list[dict]:
-    return [{"id": int(poem.id), "title": poem.title, "author": poem.author} for poem in poems if poem.id is not None]
+def memorized_poem_brief_payloads(session: Session, telegram_user_id: int) -> list[dict]:
+    memorized_events = [
+        event
+        for event in session.exec(
+            select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+        ).all()
+        if event.outcome == "memorized"
+    ]
+    memorized_events.sort(key=lambda event: event.created_at, reverse=True)
+
+    payload: list[dict] = []
+    seen: set[int] = set()
+    for event in memorized_events:
+        if event.poem_id in seen:
+            continue
+        poem = session.get(Poem, event.poem_id)
+        if poem is None or poem.id is None:
+            continue
+
+        seen.add(event.poem_id)
+        payload.append(
+            {
+                "id": int(poem.id),
+                "title": poem.title,
+                "author": poem.author,
+                "memorized_at": event.created_at.strftime("%d.%m.%Y"),
+            }
+        )
+    return payload
 
 
 def filter_poems_by_preferences(poems: list[Poem], user: UserProfile) -> list[Poem]:
@@ -266,8 +293,16 @@ def memorized_poems_reply(session: Session, telegram_user_id: int, ui_language: 
         return "Memorized poems list is empty."
 
     if ui_lang == "ru":
-        return "Ваши выученные стихи:\n\n" + "\n".join(lines)
-    return "Your memorized poems:\n\n" + "\n".join(lines)
+        return (
+            "Ниже представлены стихотворения и дата, когда Вы их выучили. "
+            "При желании Вы можете проверить насколько хорошо помните произведение. "
+            "Для этого нажмите на нужное стихотворение"
+        )
+    return (
+        "Below are poems and the dates when you learned them. "
+        "If you want, you can check how well you remember a poem. "
+        "Tap the poem you want to revise."
+    )
 
 
 def select_revision_candidate(session: Session, telegram_user_id: int) -> Poem | None:
