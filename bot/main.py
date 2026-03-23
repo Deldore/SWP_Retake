@@ -65,7 +65,7 @@ TEXTS = {
         "memory_request": "Memory check",
         "memory_prompt": "Try to write the poem from memory and send it in chat.",
         "memory_no_poem": "First get a recommendation, then start memory check.",
-        "rec_new": "New recommendation",
+        "rec_new": "New recommendations",
         "rec_hide": "Hide text",
         "rec_show": "Show text",
         "mem_retry": "Try again",
@@ -123,7 +123,7 @@ TEXTS = {
         "memory_request": "Проверка памяти",
         "memory_prompt": "Попробуйте самостоятельно написать текст стихотворения по памяти и отправьте его в чат",
         "memory_no_poem": "Сначала получите рекомендацию, затем запускайте проверку памяти.",
-        "rec_new": "Новая рекомендация",
+        "rec_new": "Новые рекомендации",
         "rec_hide": "Скрыть текст",
         "rec_show": "Показать текст",
         "mem_retry": "Попробовать еще",
@@ -226,6 +226,19 @@ def recommendation_actions_keyboard(ui_lang: str, show_text: bool) -> InlineKeyb
             [InlineKeyboardButton(t(ui_lang, "mem_main"), callback_data="menu:main")],
         ]
     )
+
+
+def memorized_poems_keyboard(ui_lang: str, memorized_poems: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for poem in memorized_poems:
+        poem_id = poem.get("id")
+        title = str(poem.get("title", ""))
+        if poem_id is None:
+            continue
+        rows.append([InlineKeyboardButton(title, callback_data=f"learned:open:{poem_id}")])
+
+    rows.append([InlineKeyboardButton(t(ui_lang, "mem_main"), callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
 
 
 def memory_error_keyboard(ui_lang: str) -> InlineKeyboardMarkup:
@@ -480,6 +493,10 @@ def backend_memorized_poems(payload: dict) -> dict:
     return backend_post("/api/memorized-poems", payload)
 
 
+def backend_memorized_poem(payload: dict) -> dict:
+    return backend_post("/api/memorized-poem", payload)
+
+
 def recommendation_request_text(context: ContextTypes.DEFAULT_TYPE, ui_lang: str) -> str:
     prefs = get_prefs(context)
     required = {"language", "difficulty", "theme"}
@@ -551,6 +568,19 @@ async def request_and_render_recommendation(message: Message, user, context: Con
             await safe_edit_message(message, recommendation_text, parse_mode="HTML", reply_markup=recommendation_markup)
         else:
             await message.reply_text(recommendation_text, parse_mode="HTML", reply_markup=recommendation_markup)
+        return
+
+    if response.get("action") == "no_matching_poems":
+        memorized_poems = response.get("memorized_poems") or []
+        if memorized_poems:
+            markup = memorized_poems_keyboard(ui_lang, memorized_poems)
+        else:
+            markup = main_menu_keyboard(ui_lang)
+
+        if edit:
+            await safe_edit_message(message, response.get("reply_text", ""), reply_markup=markup)
+        else:
+            await message.reply_text(response.get("reply_text", ""), reply_markup=markup)
         return
 
     if edit:
@@ -683,6 +713,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
+    if data.startswith("learned:open:"):
+        if query.message is None or update.effective_user is None:
+            return
+        poem_id_raw = data.split(":", maxsplit=2)[2]
+        try:
+            poem_id = int(poem_id_raw)
+        except ValueError:
+            return
+
+        try:
+            response = backend_memorized_poem(
+                {
+                    "telegram_user_id": update.effective_user.id,
+                    "poem_id": poem_id,
+                    "ui_language": ui_lang,
+                }
+            )
+        except RequestException:
+            logger.exception("Failed to call backend /api/memorized-poem")
+            await safe_edit_query_message(
+                update,
+                t(ui_lang, "backend_unavailable"),
+                reply_markup=main_menu_keyboard(ui_lang),
+            )
+            return
+
+        if response.get("action") == "memorized_poem_selected" and isinstance(response.get("poem"), dict):
+            poem = response["poem"]
+            store_recommendation_state(context, poem)
+            await safe_edit_query_message(
+                update,
+                format_recommendation_message(poem, ui_lang, show_text=True),
+                parse_mode="HTML",
+                reply_markup=recommendation_actions_keyboard(ui_lang, show_text=True),
+            )
+            return
+
+        await safe_edit_query_message(
+            update,
+            response.get("reply_text", ""),
+            reply_markup=main_menu_keyboard(ui_lang),
+        )
+        return
+
     if data == "rec:toggle":
         if active_poem is None:
             await query.answer(t(ui_lang, "memory_no_poem"), show_alert=True)
@@ -804,7 +878,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_edit_query_message(
             update,
             response.get("reply_text", ""),
-            reply_markup=main_menu_keyboard(ui_lang),
+            reply_markup=memorized_poems_keyboard(ui_lang, response.get("memorized_poems") or []),
         )
         return
 

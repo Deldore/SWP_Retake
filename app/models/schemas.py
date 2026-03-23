@@ -11,6 +11,12 @@ class PoemPayload(BaseModel):
     text: str
 
 
+class PoemBriefPayload(BaseModel):
+    id: int
+    title: str
+    author: str
+
+
 class ChatRequest(BaseModel):
     telegram_user_id: int
     text: str
@@ -42,8 +48,15 @@ class MemorizedPoemsRequest(BaseModel):
     ui_language: str = "en"
 
 
+class MemorizedPoemByIdRequest(BaseModel):
+    telegram_user_id: int
+    poem_id: int
+    ui_language: str = "en"
+
+
 class BotReply(BaseModel):
     reply_text: str
     recommended_poem_id: int | None = None
     action: str
     poem: PoemPayload | None = None
+    memorized_poems: list[PoemBriefPayload] = []

@@ -129,6 +129,44 @@ def learner_profile_summary(session: Session, telegram_user_id: int) -> dict:
     }
 
 
+def memorized_poems(session: Session, telegram_user_id: int) -> list[Poem]:
+    memorized_events = [
+        event
+        for event in session.exec(
+            select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+        ).all()
+        if event.outcome == "memorized"
+    ]
+    memorized_events.sort(key=lambda event: event.created_at, reverse=True)
+
+    result: list[Poem] = []
+    seen: set[int] = set()
+    for event in memorized_events:
+        if event.poem_id in seen:
+            continue
+        poem = session.get(Poem, event.poem_id)
+        if poem is None:
+            continue
+        seen.add(event.poem_id)
+        result.append(poem)
+    return result
+
+
+def poem_brief_payloads(poems: list[Poem]) -> list[dict]:
+    return [{"id": int(poem.id), "title": poem.title, "author": poem.author} for poem in poems if poem.id is not None]
+
+
+def filter_poems_by_preferences(poems: list[Poem], user: UserProfile) -> list[Poem]:
+    filtered = poems
+    if user.language_pref != "mixed":
+        filtered = [poem for poem in filtered if poem.language == user.language_pref]
+    if user.difficulty_pref != "medium":
+        filtered = [poem for poem in filtered if poem.difficulty == user.difficulty_pref]
+    if user.theme_pref != "mixed":
+        filtered = [poem for poem in filtered if poem.theme == user.theme_pref]
+    return filtered
+
+
 def choose_poem(session: Session, user: UserProfile) -> Poem:
     history = session.exec(
         select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == user.telegram_user_id)
@@ -162,6 +200,13 @@ def choose_poem(session: Session, user: UserProfile) -> Poem:
 
     candidates.sort(key=score, reverse=True)
     return candidates[0]
+
+
+def select_memorized_poem_for_user(session: Session, telegram_user_id: int, poem_id: int) -> Poem | None:
+    memorized_ids = {poem.id for poem in memorized_poems(session, telegram_user_id)}
+    if poem_id not in memorized_ids:
+        return None
+    return session.get(Poem, poem_id)
 
 
 def mark_poem_memorized(
@@ -202,33 +247,14 @@ def mark_poem_memorized(
 
 def memorized_poems_reply(session: Session, telegram_user_id: int, ui_language: str = "en") -> str:
     ui_lang = normalize_ui_language(ui_language)
-    memorized_events = [
-        event
-        for event in session.exec(
-            select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
-        ).all()
-        if event.outcome == "memorized"
-    ]
-
-    if not memorized_events:
+    poems = memorized_poems(session, telegram_user_id)
+    if not poems:
         if ui_lang == "ru":
             return "Пока нет выученных стихов. Выучите хотя бы одно стихотворение, и оно появится в этом списке."
         return "No memorized poems yet. Learn at least one poem and it will appear in this list."
 
-    memorized_events.sort(key=lambda event: event.created_at, reverse=True)
-    unique_poem_ids: list[int] = []
-    seen: set[int] = set()
-    for event in memorized_events:
-        if event.poem_id in seen:
-            continue
-        seen.add(event.poem_id)
-        unique_poem_ids.append(event.poem_id)
-
     lines: list[str] = []
-    for idx, poem_id in enumerate(unique_poem_ids, start=1):
-        poem = session.get(Poem, poem_id)
-        if poem is None:
-            continue
+    for idx, poem in enumerate(poems, start=1):
         if ui_lang == "ru":
             lines.append(f"{idx}. {poem.title} - {poem.author}")
         else:
@@ -372,7 +398,24 @@ def build_reply(
                 None,
             )
 
-    poem = choose_poem(session, user)
+    active_poems = session.exec(select(Poem).where(Poem.is_active == True)).all()  # noqa: E712
+    matching_poems = filter_poems_by_preferences(active_poems, user)
+    memorized_ids = {poem.id for poem in memorized_poems(session, telegram_user_id)}
+    non_memorized_matching_poems = [poem for poem in matching_poems if poem.id not in memorized_ids]
+
+    if not non_memorized_matching_poems:
+        memorized_list = memorized_poems(session, telegram_user_id)
+        if ui_lang == "ru":
+            no_match_reply = "К сожалению, количество стихотворений ограничено, не могу подобрать подходящее Вам."
+            if memorized_list:
+                no_match_reply += "\n\nЖелаете повторить что-то из уже изученного?"
+        else:
+            no_match_reply = "Unfortunately, the poem collection is limited and I cannot find a suitable match for you."
+            if memorized_list:
+                no_match_reply += "\n\nWould you like to revise something you have already learned?"
+        return no_match_reply, None, "no_matching_poems", None
+
+    poem = non_memorized_matching_poems[0]
     session.add(
         RecommendationEvent(
             telegram_user_id=telegram_user_id,
