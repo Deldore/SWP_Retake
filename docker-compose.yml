@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: poetry-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./poetry.db:/app/poetry.db
+    ports:
+      - "8000:8000"
+
+  bot:
+    build:
+      context: .
+      dockerfile: bot.Dockerfile
+    container_name: poetry-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - BACKEND_PUBLIC_URL=http://backend:8000
+    depends_on:
+      - backend
