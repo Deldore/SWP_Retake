@@ -120,27 +120,25 @@ def learner_profile_summary(session: Session, telegram_user_id: int) -> dict:
     revisions = session.exec(
         select(RevisionEvent).where(RevisionEvent.telegram_user_id == telegram_user_id)
     ).all()
-    completed = [h for h in history if h.outcome == "memorized"]
+    memorized_poem_ids = {h.poem_id for h in history if h.outcome == "memorized"}
     avg_score = sum(r.score for r in revisions) / len(revisions) if revisions else 0.0
     return {
         "recommendations_total": len(history),
-        "memorized_total": len(completed),
+        "memorized_total": len(memorized_poem_ids),
         "average_revision_score": round(avg_score, 2),
     }
 
 
 def choose_poem(session: Session, user: UserProfile) -> Poem:
-    seen_poem_ids = {
-        event.poem_id
-        for event in session.exec(
-            select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == user.telegram_user_id)
-        ).all()
-    }
+    history = session.exec(
+        select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == user.telegram_user_id)
+    ).all()
+    seen_counts = Counter([event.poem_id for event in history])
+    memorized_poem_ids = {event.poem_id for event in history if event.outcome == "memorized"}
+    last_poem_id = history[-1].poem_id if history else None
 
     poems = session.exec(select(Poem).where(Poem.is_active == True)).all()  # noqa: E712
-    candidates = [p for p in poems if p.id not in seen_poem_ids]
-    if not candidates:
-        candidates = poems
+    candidates = poems
 
     def score(poem: Poem) -> int:
         value = 0
@@ -150,10 +148,100 @@ def choose_poem(session: Session, user: UserProfile) -> Poem:
             value += 2
         if user.theme_pref in ("mixed", poem.theme):
             value += 2
+
+        if poem.id in memorized_poem_ids:
+            value += 5
+
+        value += min(2, seen_counts.get(poem.id, 0))
+
+        # Avoid immediate same-poem repeats while still allowing periodic revision.
+        if last_poem_id is not None and poem.id == last_poem_id:
+            value -= 4
+
         return value
 
     candidates.sort(key=score, reverse=True)
     return candidates[0]
+
+
+def mark_poem_memorized(
+    session: Session,
+    telegram_user_id: int,
+    poem_id: int,
+    full_name: str,
+    username: str,
+    score: float = 1.0,
+    note: str = "Memorized via bot memory check",
+) -> None:
+    upsert_user(session, telegram_user_id, full_name, username)
+
+    poem = session.get(Poem, poem_id)
+    if poem is None:
+        return
+
+    session.add(
+        RevisionEvent(
+            telegram_user_id=telegram_user_id,
+            poem_id=poem_id,
+            prompt_type="local_memory_check",
+            score=score,
+            notes=note,
+        )
+    )
+    session.add(
+        RecommendationEvent(
+            telegram_user_id=telegram_user_id,
+            poem_id=poem_id,
+            outcome="memorized",
+            score=score,
+            feedback=note,
+        )
+    )
+    session.commit()
+
+
+def memorized_poems_reply(session: Session, telegram_user_id: int, ui_language: str = "en") -> str:
+    ui_lang = normalize_ui_language(ui_language)
+    memorized_events = [
+        event
+        for event in session.exec(
+            select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+        ).all()
+        if event.outcome == "memorized"
+    ]
+
+    if not memorized_events:
+        if ui_lang == "ru":
+            return "Пока нет выученных стихов. Выучите хотя бы одно стихотворение, и оно появится в этом списке."
+        return "No memorized poems yet. Learn at least one poem and it will appear in this list."
+
+    memorized_events.sort(key=lambda event: event.created_at, reverse=True)
+    unique_poem_ids: list[int] = []
+    seen: set[int] = set()
+    for event in memorized_events:
+        if event.poem_id in seen:
+            continue
+        seen.add(event.poem_id)
+        unique_poem_ids.append(event.poem_id)
+
+    lines: list[str] = []
+    for idx, poem_id in enumerate(unique_poem_ids, start=1):
+        poem = session.get(Poem, poem_id)
+        if poem is None:
+            continue
+        if ui_lang == "ru":
+            lines.append(f"{idx}. {poem.title} - {poem.author}")
+        else:
+            lines.append(f"{idx}. {poem.title} - {poem.author}")
+
+    if not lines:
+        if ui_lang == "ru":
+            return "Список выученных стихов пока пуст."
+        return "Memorized poems list is empty."
+
+    if ui_lang == "ru":
+        return "Ваши выученные стихи:\n\n" + "\n".join(lines)
+    return "Your memorized poems:\n\n" + "\n".join(lines)
 
 
 def select_revision_candidate(session: Session, telegram_user_id: int) -> Poem | None:
@@ -212,7 +300,7 @@ def build_reply(
     full_name: str,
     username: str,
     ui_language: str = "en",
-) -> tuple[str, int | None, str]:
+) -> tuple[str, int | None, str, dict | None]:
     ui_lang = normalize_ui_language(ui_language)
     user = upsert_user(session, telegram_user_id, full_name, username)
     prefs = infer_preferences(text)
@@ -239,6 +327,7 @@ def build_reply(
                 reply,
                 poem.id,
                 "revision_prompt",
+                None,
             )
 
     if any(k in lowered for k in ["memorized", "remember", "знаю", "выучил", "выучила", "помню", "continue"]):
@@ -280,6 +369,7 @@ def build_reply(
                 recall_reply,
                 poem.id,
                 "memorization_checked",
+                None,
             )
 
     poem = choose_poem(session, user)
@@ -295,4 +385,13 @@ def build_reply(
     session.commit()
     profile = learner_profile_summary(session, telegram_user_id)
     reply = format_recommendation_reply(poem, user, profile, ui_lang)
-    return reply, poem.id, "recommendation"
+    poem_payload = {
+        "id": poem.id,
+        "title": poem.title,
+        "author": poem.author,
+        "language": poem.language,
+        "difficulty": poem.difficulty,
+        "theme": poem.theme,
+        "text": poem.text,
+    }
+    return reply, poem.id, "recommendation", poem_payload

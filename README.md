@@ -40,6 +40,8 @@ The Telegram bot supports both free text and inline-button navigation.
 - one-tap memory check prompt
 - quick actions after each response (new recommendation, memory check, main menu)
 - voice-message shortcut flow with guidance
+- interface language switcher (RU/EN) in the main menu
+- recommendation replies include a clearer "what to do next" step-by-step block
 
 ## Admin panel
 
@@ -141,6 +143,20 @@ In Docker mode, `docker-compose.yml` overrides bot backend URL to `http://backen
 
 ```bash
 docker compose up -d --build
+```
+
+### 2.1 Development with bind mounts (no rebuild for code changes)
+
+`docker-compose.yml` mounts source folders into containers:
+
+- `./app -> /app/app`
+- `./bot -> /app/bot`
+
+After changing Python code, rebuild is usually not needed. Restart only the changed service:
+
+```bash
+docker compose restart backend
+docker compose restart bot
 ```
 
 ### 3. Check logs
