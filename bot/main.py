@@ -55,6 +55,7 @@ TEXTS = {
         "pref_en": "English",
         "pref_mixed": "Mixed",
         "pref_easy": "Easy",
+        "pref_medium": "Medium",
         "pref_hard": "Hard",
         "pref_love": "Love",
         "pref_nature": "Nature",
@@ -121,6 +122,7 @@ TEXTS = {
         "pref_en": "Английский",
         "pref_mixed": "Смешанный",
         "pref_easy": "Легко",
+        "pref_medium": "Средне",
         "pref_hard": "Сложно",
         "pref_love": "Любовь",
         "pref_nature": "Природа",
@@ -288,6 +290,7 @@ def recommendation_keyboard(prefs: dict[str, str], ui_lang: str) -> InlineKeyboa
             ],
             [
                 InlineKeyboardButton(mark(difficulty, "easy", t(ui_lang, "pref_easy")), callback_data="pref:diff:easy"),
+                InlineKeyboardButton(mark(difficulty, "medium", t(ui_lang, "pref_medium")), callback_data="pref:diff:medium"),
                 InlineKeyboardButton(mark(difficulty, "hard", t(ui_lang, "pref_hard")), callback_data="pref:diff:hard"),
             ],
             [
@@ -328,6 +331,7 @@ def build_preference_text(prefs: dict[str, str], ui_lang: str) -> str:
         }
         ru_difficulty_map = {
             "easy": "легкое",
+            "medium": "среднее",
             "hard": "сложное",
         }
         ru_theme_map = {
@@ -348,6 +352,7 @@ def build_preference_text(prefs: dict[str, str], ui_lang: str) -> str:
     }
     difficulty_map = {
         "easy": "easy",
+        "medium": "medium",
         "hard": "hard",
     }
     theme_map = {

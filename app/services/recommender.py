@@ -89,6 +89,8 @@ def infer_preferences(message: str) -> dict[str, str]:
         prefs["difficulty_pref"] = "easy"
     elif any(word in text for word in ["hard", "слож", "challenge", "сложно"]):
         prefs["difficulty_pref"] = "hard"
+    elif any(word in text for word in ["medium", "средн", "normal", "обыч"]):
+        prefs["difficulty_pref"] = "medium"
 
     theme_map = {
         "love": ["love", "любов", "роман"],
@@ -184,14 +186,44 @@ def memorized_poem_brief_payloads(session: Session, telegram_user_id: int) -> li
 
 
 def filter_poems_by_preferences(poems: list[Poem], user: UserProfile) -> list[Poem]:
+    # Product rule: language and theme are strict; difficulty is intentionally ignored.
     filtered = poems
     if user.language_pref != "mixed":
         filtered = [poem for poem in filtered if poem.language == user.language_pref]
-    if user.difficulty_pref != "medium":
-        filtered = [poem for poem in filtered if poem.difficulty == user.difficulty_pref]
     if user.theme_pref != "mixed":
         filtered = [poem for poem in filtered if poem.theme == user.theme_pref]
     return filtered
+
+
+def score_poem_candidate(poem: Poem, user: UserProfile, seen_counts: Counter, last_poem_id: int | None) -> int:
+    value = 0
+    if user.language_pref in ("mixed", poem.language):
+        value += 3
+    if user.difficulty_pref in ("medium", poem.difficulty):
+        value += 2
+    if user.theme_pref in ("mixed", poem.theme):
+        value += 2
+
+    value += min(2, seen_counts.get(poem.id, 0))
+
+    # Avoid immediate same-poem repeats.
+    if last_poem_id is not None and poem.id == last_poem_id:
+        value -= 4
+    return value
+
+
+def pick_best_candidate(candidates: list[Poem], user: UserProfile, history: list[RecommendationEvent]) -> Poem | None:
+    if not candidates:
+        return None
+
+    seen_counts = Counter([event.poem_id for event in history])
+    last_poem_id = history[-1].poem_id if history else None
+    candidates_sorted = sorted(
+        candidates,
+        key=lambda poem: score_poem_candidate(poem, user, seen_counts, last_poem_id),
+        reverse=True,
+    )
+    return candidates_sorted[0]
 
 
 def choose_poem(session: Session, user: UserProfile) -> Poem:
@@ -434,11 +466,15 @@ def build_reply(
             )
 
     active_poems = session.exec(select(Poem).where(Poem.is_active == True)).all()  # noqa: E712
-    matching_poems = filter_poems_by_preferences(active_poems, user)
+    history = session.exec(
+        select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+    ).all()
     memorized_ids = {poem.id for poem in memorized_poems(session, telegram_user_id)}
-    non_memorized_matching_poems = [poem for poem in matching_poems if poem.id not in memorized_ids]
+    non_memorized_poems = [poem for poem in active_poems if poem.id not in memorized_ids]
 
-    if not non_memorized_matching_poems:
+    candidate_pool = filter_poems_by_preferences(non_memorized_poems, user)
+
+    if not candidate_pool:
         memorized_list = memorized_poems(session, telegram_user_id)
         if ui_lang == "ru":
             no_match_reply = "К сожалению, количество стихотворений ограничено, не могу подобрать подходящее Вам."
@@ -450,7 +486,11 @@ def build_reply(
                 no_match_reply += "\n\nWould you like to revise something you have already learned?"
         return no_match_reply, None, "no_matching_poems", None
 
-    poem = non_memorized_matching_poems[0]
+    poem = pick_best_candidate(candidate_pool, user, history)
+    if poem is None:
+        if ui_lang == "ru":
+            return "К сожалению, количество стихотворений ограничено, не могу подобрать подходящее Вам.", None, "no_matching_poems", None
+        return "Unfortunately, the poem collection is limited and I cannot find a suitable match for you.", None, "no_matching_poems", None
     session.add(
         RecommendationEvent(
             telegram_user_id=telegram_user_id,
