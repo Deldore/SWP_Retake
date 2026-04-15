@@ -9,8 +9,12 @@ from requests import RequestException
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.error import BadRequest
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
+from app.core.db import get_session, engine
+from app.services.reminder import get_inactive_users, format_reminder_message
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -982,6 +986,100 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(t(ui_lang, "unexpected_error"))
 
 
+async def send_reminders(app: Application) -> None:
+    """
+    Send reminders to inactive users.
+    This job runs daily at the configured reminder hour (default: 12:00).
+    """
+    if not settings.reminder_enabled:
+        logger.debug("Reminder job skipped: reminders are disabled in settings")
+        return
+    
+    logger.info("Starting reminder job - checking for inactive users")
+    
+    try:
+        # Get a database session
+        with engine.begin() as connection:
+            from sqlmodel import Session
+            with Session(engine) as session:
+                inactive_users = get_inactive_users(
+                    session, 
+                    days=settings.reminder_inactivity_days
+                )
+                
+                if not inactive_users:
+                    logger.info("No inactive users found for reminders")
+                    return
+                
+                logger.info(f"Found {len(inactive_users)} inactive users. Sending reminders...")
+                
+                successful_reminders = 0
+                failed_reminders = 0
+                
+                for user in inactive_users:
+                    try:
+                        # Get user's language preference
+                        ui_lang = user.language_pref if user.language_pref in ['ru', 'en'] else 'en'
+                        message_text = format_reminder_message(ui_lang)
+                        
+                        # Send reminder via Telegram
+                        await app.bot.send_message(
+                            chat_id=user.telegram_user_id,
+                            text=message_text,
+                            parse_mode="HTML"
+                        )
+                        
+                        logger.info(f"Reminder sent to user {user.telegram_user_id} ({user.full_name})")
+                        successful_reminders += 1
+                        
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to send reminder to user {user.telegram_user_id}: {e}"
+                        )
+                        failed_reminders += 1
+                
+                logger.info(
+                    f"Reminder job completed: {successful_reminders} successful, "
+                    f"{failed_reminders} failed out of {len(inactive_users)} users"
+                )
+                
+    except Exception as e:
+        logger.exception(f"Error in reminder job: {e}")
+
+
+def setup_reminder_scheduler(app: Application) -> AsyncIOScheduler:
+    """
+    Set up the APScheduler for sending reminders.
+    
+    Returns:
+        The configured AsyncIOScheduler instance
+    """
+    if not settings.reminder_enabled:
+        logger.info("Reminders are disabled. Scheduler will not be initialized.")
+        return None
+    
+    scheduler = AsyncIOScheduler()
+    
+    # Schedule the reminder job to run daily at the configured hour
+    trigger = CronTrigger(hour=settings.reminder_hour, minute=0, timezone=settings.timezone)
+    scheduler.add_job(
+        send_reminders,
+        trigger=trigger,
+        args=[app],
+        id="send_reminders",
+        name="Send reminders to inactive users",
+        replace_existing=True,
+    )
+    
+    scheduler.start()
+    logger.info(
+        f"Reminder scheduler initialized. Will send reminders daily at "
+        f"{settings.reminder_hour}:00 {settings.timezone}"
+    )
+    
+    return scheduler
+
+
 if __name__ == "__main__":
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
@@ -993,5 +1091,8 @@ if __name__ == "__main__":
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # Set up the reminder scheduler
+    scheduler = setup_reminder_scheduler(application)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     admin_username: str = Field(default="admin", alias="ADMIN_USERNAME")
     admin_password: str = Field(default="admin123", alias="ADMIN_PASSWORD")
+    
+    # Reminder settings
+    reminder_enabled: bool = Field(default=True, alias="REMINDER_ENABLED")
+    reminder_hour: int = Field(default=12, alias="REMINDER_HOUR")
+    reminder_inactivity_days: int = Field(default=3, alias="REMINDER_INACTIVITY_DAYS")
+    timezone: str = Field(default="UTC", alias="TIMEZONE")
 
     @property
     def cors_origins(self) -> list[str]:
