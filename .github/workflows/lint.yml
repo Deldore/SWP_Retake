@@ -1,0 +1,44 @@
+name: Lint & Format
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort pylint
+
+      - name: Check imports with isort
+        run: isort --check-only app bot
+        continue-on-error: true
+
+      - name: Format check with black
+        run: black --check app bot
+        continue-on-error: true
+
+      - name: Lint with flake8
+        run: |
+          flake8 app bot --count --statistics --max-line-length=127
+        continue-on-error: true
+
+      - name: Lint with pylint
+        run: |
+          pip install pylint sqlmodel
+          pylint app/core app/models app/services --disable=missing-docstring --disable=too-few-public-methods || true
+        continue-on-error: true
