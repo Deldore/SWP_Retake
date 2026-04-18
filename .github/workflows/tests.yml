@@ -93,4 +93,5 @@ jobs:
 
       - name: Verify Docker images
         run: |
-          docker images | grep poetry
+          docker images
+          docker images | head -5
