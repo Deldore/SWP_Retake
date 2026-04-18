@@ -46,6 +46,7 @@ TEXTS = {
         "menu_voice": "Voice message help",
         "menu_help": "Help",
         "menu_learned": "My memorized poems",
+        "menu_in_progress": "Poems in progress",
         "menu_lang": "Language: EN",
         "quick_new": "New recommendation",
         "quick_memory": "Memory check",
@@ -113,6 +114,7 @@ TEXTS = {
         "menu_voice": "Помощь по голосу",
         "menu_help": "Справка",
         "menu_learned": "Мои выученные стихи",
+        "menu_in_progress": "Стихи в процессе",
         "menu_lang": "Язык: RU",
         "quick_new": "Новая рекомендация",
         "quick_memory": "Проверка памяти",
@@ -218,6 +220,7 @@ def main_menu_keyboard(ui_lang: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(t(ui_lang, "menu_recommend"), callback_data="menu:recommend")],
             [InlineKeyboardButton(t(ui_lang, "menu_learned"), callback_data="menu:learned")],
+            [InlineKeyboardButton(t(ui_lang, "menu_in_progress"), callback_data="menu:in_progress")],
             [
                 InlineKeyboardButton(t(ui_lang, "menu_help"), callback_data="menu:help"),
                 InlineKeyboardButton(t(ui_lang, "menu_lang"), callback_data="menu:toggle_lang"),
@@ -260,6 +263,21 @@ def memorized_poems_keyboard(ui_lang: str, memorized_poems: list[dict]) -> Inlin
             continue
         label = f"{title} ({memorized_at})" if memorized_at else title
         rows.append([InlineKeyboardButton(label, callback_data=f"learned:open:{poem_id}")])
+
+    rows.append([InlineKeyboardButton(t(ui_lang, "mem_main"), callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def in_progress_poems_keyboard(ui_lang: str, in_progress_poems: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for poem in in_progress_poems:
+        poem_id = poem.get("id")
+        title = str(poem.get("title", ""))
+        started_at = str(poem.get("started_at", "")).strip()
+        if poem_id is None:
+            continue
+        label = f"{title} ({started_at})" if started_at else title
+        rows.append([InlineKeyboardButton(label, callback_data=f"progress:open:{poem_id}")])
 
     rows.append([InlineKeyboardButton(t(ui_lang, "mem_main"), callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
@@ -524,6 +542,14 @@ def backend_memorized_poem(payload: dict) -> dict:
     return backend_post("/api/memorized-poem", payload)
 
 
+def backend_in_progress_poems(payload: dict) -> dict:
+    return backend_post("/api/in-progress-poems", payload)
+
+
+def backend_in_progress_poem(payload: dict) -> dict:
+    return backend_post("/api/in-progress-poem", payload)
+
+
 def recommendation_request_text(context: ContextTypes.DEFAULT_TYPE, ui_lang: str) -> str:
     prefs = get_prefs(context)
     required = {"language", "difficulty", "theme"}
@@ -784,6 +810,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    if data.startswith("progress:open:"):
+        if query.message is None or update.effective_user is None:
+            return
+        poem_id_raw = data.split(":", maxsplit=2)[2]
+        try:
+            poem_id = int(poem_id_raw)
+        except ValueError:
+            return
+
+        try:
+            response = backend_in_progress_poem(
+                {
+                    "telegram_user_id": update.effective_user.id,
+                    "poem_id": poem_id,
+                    "ui_language": ui_lang,
+                }
+            )
+        except RequestException:
+            logger.exception("Failed to call backend /api/in-progress-poem")
+            await safe_edit_query_message(
+                update,
+                t(ui_lang, "backend_unavailable"),
+                reply_markup=main_menu_keyboard(ui_lang),
+            )
+            return
+
+        if response.get("action") == "in_progress_poem_selected" and isinstance(response.get("poem"), dict):
+            poem = response["poem"]
+            store_recommendation_state(context, poem)
+            await safe_edit_query_message(
+                update,
+                format_recommendation_message(poem, ui_lang, show_text=True),
+                parse_mode="HTML",
+                reply_markup=recommendation_actions_keyboard(ui_lang, show_text=True),
+            )
+            return
+
+        await safe_edit_query_message(
+            update,
+            response.get("reply_text", ""),
+            reply_markup=main_menu_keyboard(ui_lang),
+        )
+        return
+
     if data == "rec:toggle":
         if active_poem is None:
             await query.answer(t(ui_lang, "memory_no_poem"), show_alert=True)
@@ -906,6 +976,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             update,
             response.get("reply_text", ""),
             reply_markup=memorized_poems_keyboard(ui_lang, response.get("memorized_poems") or []),
+        )
+        return
+
+    if data == "menu:in_progress":
+        if update.effective_user is None:
+            return
+        try:
+            response = backend_in_progress_poems(
+                {
+                    "telegram_user_id": update.effective_user.id,
+                    "ui_language": ui_lang,
+                }
+            )
+        except RequestException:
+            logger.exception("Failed to call backend /api/in-progress-poems")
+            await safe_edit_query_message(
+                update,
+                t(ui_lang, "backend_unavailable"),
+                reply_markup=main_menu_keyboard(ui_lang),
+            )
+            return
+
+        await safe_edit_query_message(
+            update,
+            response.get("reply_text", ""),
+            reply_markup=in_progress_poems_keyboard(ui_lang, response.get("in_progress_poems") or []),
         )
         return
 

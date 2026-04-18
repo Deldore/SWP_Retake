@@ -12,10 +12,13 @@ from app.models.schemas import (
 )
 from app.services.recommender import (
     build_reply,
+    in_progress_poem_brief_payloads,
+    in_progress_poems_reply,
     mark_poem_memorized,
     memorized_poem_brief_payloads,
     memorized_poems_reply,
     record_audio_submission,
+    select_in_progress_poem_for_user,
     select_memorized_poem_for_user,
 )
 
@@ -131,5 +134,48 @@ def memorized_poem(payload: MemorizedPoemByIdRequest, session: Session = Depends
         reply_text="",
         recommended_poem_id=poem.id,
         action="memorized_poem_selected",
+        poem=poem_payload,
+    )
+
+
+@router.post("/in-progress-poems", response_model=BotReply)
+def in_progress_poems_list(payload: MemorizedPoemsRequest, session: Session = Depends(get_session)) -> BotReply:
+    """Get list of poems in progress (started but not memorized)."""
+    return BotReply(
+        reply_text=in_progress_poems_reply(
+            session,
+            telegram_user_id=payload.telegram_user_id,
+            ui_language=payload.ui_language,
+        ),
+        recommended_poem_id=None,
+        action="in_progress_poems_list",
+        in_progress_poems=in_progress_poem_brief_payloads(session, payload.telegram_user_id),
+    )
+
+
+@router.post("/in-progress-poem", response_model=BotReply)
+def in_progress_poem(payload: MemorizedPoemByIdRequest, session: Session = Depends(get_session)) -> BotReply:
+    """Get a specific in-progress poem."""
+    poem = select_in_progress_poem_for_user(session, payload.telegram_user_id, payload.poem_id)
+    if poem is None:
+        if payload.ui_language == "ru":
+            text = "Стихотворение не найдено среди стихов в процессе обучения."
+        else:
+            text = "Poem was not found among in-progress items."
+        return BotReply(reply_text=text, recommended_poem_id=None, action="in_progress_poem_not_found")
+
+    poem_payload = {
+        "id": int(poem.id),
+        "title": poem.title,
+        "author": poem.author,
+        "language": poem.language,
+        "difficulty": poem.difficulty,
+        "theme": poem.theme,
+        "text": poem.text,
+    }
+    return BotReply(
+        reply_text="",
+        recommended_poem_id=poem.id,
+        action="in_progress_poem_selected",
         poem=poem_payload,
     )

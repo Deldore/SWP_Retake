@@ -16,6 +16,7 @@ class PoemBriefPayload(BaseModel):
     title: str
     author: str
     memorized_at: str | None = None
+    started_at: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -61,3 +62,4 @@ class BotReply(BaseModel):
     action: str
     poem: PoemPayload | None = None
     memorized_poems: list[PoemBriefPayload] = []
+    in_progress_poems: list[PoemBriefPayload] = []

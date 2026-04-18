@@ -337,6 +337,135 @@ def memorized_poems_reply(session: Session, telegram_user_id: int, ui_language: 
     )
 
 
+def in_progress_poems(session: Session, telegram_user_id: int) -> list[Poem]:
+    """
+    Get poems that have been attempted but not yet memorized.
+    A poem is "in progress" if:
+    1. User has attempted it at least once
+    2. No attempt resulted in "memorized" outcome
+    """
+    all_events = session.exec(
+        select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+    ).all()
+    
+    # Find memorized poem IDs
+    memorized_ids = {event.poem_id for event in all_events if event.outcome == "memorized"}
+    
+    # Find all attempted poem IDs (with any outcome except memorized)
+    attempted_ids = {event.poem_id for event in all_events if event.outcome in {"partial", "audio_received"}}
+    
+    # In-progress = attempted but not memorized
+    in_progress_ids = attempted_ids - memorized_ids
+    
+    if not in_progress_ids:
+        return []
+    
+    # Sort by most recent attempt
+    in_progress_events = [event for event in all_events if event.poem_id in in_progress_ids]
+    in_progress_events.sort(key=lambda event: event.created_at, reverse=True)
+    
+    result: list[Poem] = []
+    seen: set[int] = set()
+    for event in in_progress_events:
+        if event.poem_id in seen:
+            continue
+        poem = session.get(Poem, event.poem_id)
+        if poem is None:
+            continue
+        seen.add(event.poem_id)
+        result.append(poem)
+    
+    return result
+
+
+def in_progress_poem_brief_payloads(session: Session, telegram_user_id: int) -> list[dict]:
+    """
+    Get brief information about in-progress poems.
+    """
+    all_events = session.exec(
+        select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
+    ).all()
+    
+    # Find memorized poem IDs
+    memorized_ids = {event.poem_id for event in all_events if event.outcome == "memorized"}
+    
+    # Find all attempted poem IDs (with any outcome except memorized)
+    attempted_ids = {event.poem_id for event in all_events if event.outcome in {"partial", "audio_received"}}
+    
+    # In-progress = attempted but not memorized
+    in_progress_ids = attempted_ids - memorized_ids
+    
+    if not in_progress_ids:
+        return []
+    
+    # Sort by most recent attempt
+    in_progress_events = [event for event in all_events if event.poem_id in in_progress_ids]
+    in_progress_events.sort(key=lambda event: event.created_at, reverse=True)
+    
+    payload: list[dict] = []
+    seen: set[int] = set()
+    for event in in_progress_events:
+        if event.poem_id in seen:
+            continue
+        poem = session.get(Poem, event.poem_id)
+        if poem is None or poem.id is None:
+            continue
+        
+        seen.add(event.poem_id)
+        payload.append(
+            {
+                "id": int(poem.id),
+                "title": poem.title,
+                "author": poem.author,
+                "started_at": event.created_at.strftime("%d.%m.%Y"),
+            }
+        )
+    
+    return payload
+
+
+def in_progress_poems_reply(session: Session, telegram_user_id: int, ui_language: str = "en") -> str:
+    """
+    Get reply text for in-progress poems list.
+    """
+    ui_lang = normalize_ui_language(ui_language)
+    poems = in_progress_poems(session, telegram_user_id)
+    
+    if not poems:
+        if ui_lang == "ru":
+            return "Стихотворений в процессе обучения нет. Начните изучение нового стихотворения и вернитесь к нему позже."
+        return "No poems in progress. Start learning a new poem and come back to it later."
+    
+    lines: list[str] = []
+    for idx, poem in enumerate(poems, start=1):
+        lines.append(f"{idx}. {poem.title} - {poem.author}")
+    
+    if not lines:
+        if ui_lang == "ru":
+            return "Список стихов в процессе обучения пуст."
+        return "In-progress poems list is empty."
+    
+    if ui_lang == "ru":
+        return (
+            "Ниже представлены стихотворения, которые Вы начали учить. "
+            "Нажмите на стихотворение, чтобы продолжить его изучение и попробовать сдать снова."
+        )
+    return (
+        "Below are poems you started learning. "
+        "Tap a poem to continue learning it and try to recall it again."
+    )
+
+
+def select_in_progress_poem_for_user(session: Session, telegram_user_id: int, poem_id: int) -> Poem | None:
+    """
+    Get an in-progress poem if it belongs to the user.
+    """
+    in_progress_ids = {poem.id for poem in in_progress_poems(session, telegram_user_id)}
+    if poem_id not in in_progress_ids:
+        return None
+    return session.get(Poem, poem_id)
+
+
 def select_revision_candidate(session: Session, telegram_user_id: int) -> Poem | None:
     history = session.exec(
         select(RecommendationEvent).where(RecommendationEvent.telegram_user_id == telegram_user_id)
